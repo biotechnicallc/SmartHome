@@ -1,0 +1,15 @@
+# uFBT / build output
+dist/
+.vscode/compile_commands.json
+
+# Editor / OS noise
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary / backup files
+*.bak
+*.tmp
+*.log
+*before*

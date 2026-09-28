@@ -1,0 +1,12 @@
+App(
+    appid="smart_home",
+    name="Smart Home",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="smart_home_app",
+    stack_size=4 * 1024,
+    fap_category="GPIO",
+    fap_icon="smart_home_10px.png",
+    fap_description="Control supported smart home devices through a Wi-Fi Developer Board",
+    fap_author="Vincenzo",
+    fap_version="1.0.0",
+)
