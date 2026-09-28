@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1
+
+Added Home Assistant climate/thermostat support.
+
+- Added generic Home Assistant `climate.*` entity support
+- Added Home Assistant Thermostat device type
+- Added thermostat status display
+- Added temperature increase and decrease controls
+- Added direct Set Temperature control
+- Added Cool, Heat, Auto/Heat-Cool, and Off controls
+- Added Fan Auto and Fan On controls
+- Added climate entity entry when creating a thermostat
+- Removed installation-specific thermostat identifiers
+- Improved protection for credentials and runtime files
+- Retained existing Shelly support and stable device IDs
+
 ## 1.0
 
 Initial public release.

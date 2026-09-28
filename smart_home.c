@@ -5,6 +5,7 @@
 #include <gui/modules/dialog_ex.h>
 #include <gui/modules/text_input.h>
 #include <storage/storage.h>
+#include <stdlib.h>
 
 #include "flipper_http/flipper_http.h"
 
@@ -22,6 +23,7 @@
 
 typedef enum {
     DeviceTypeShelly = 1,
+    DeviceTypeHomeAssistantThermostat = 2,
 } DeviceType;
 
 typedef struct {
@@ -51,6 +53,17 @@ typedef enum {
     DeviceActionToggle,
     DeviceActionRename,
     DeviceActionDelete,
+
+    DeviceActionThermostatStatus,
+    DeviceActionThermostatTempUp,
+    DeviceActionThermostatTempDown,
+    DeviceActionThermostatSetTemperature,
+    DeviceActionThermostatCool,
+    DeviceActionThermostatHeat,
+    DeviceActionThermostatAuto,
+    DeviceActionThermostatOff,
+    DeviceActionThermostatFanAuto,
+    DeviceActionThermostatFanOn,
 } DeviceAction;
 
 typedef enum {
@@ -58,6 +71,8 @@ typedef enum {
     InputModeName,
     InputModeIp,
     InputModeRename,
+    InputModeSetTemperature,
+    InputModeHaEntity,
     InputModeRelayUrl,
     InputModeApiToken,
 } InputMode;
@@ -79,9 +94,11 @@ typedef struct {
     SmartHomeDevice devices[MAX_DEVICES];
     size_t device_count;
     size_t selected_device;
+    DeviceType pending_device_type;
 
     char input_buffer[DEVICE_NAME_SIZE];
     char pending_name[DEVICE_NAME_SIZE];
+    char entity_input[DEVICE_REMOTE_ID_SIZE];
 
     char relay_url[RELAY_URL_SIZE];
     char api_token[API_TOKEN_SIZE];
@@ -138,6 +155,150 @@ static bool smart_home_send(SmartHomeApp* app, const char* url) {
 
     return counter > 0;
 }
+
+static bool smart_home_send_post(
+    SmartHomeApp* app,
+    const char* url,
+    const char* payload) {
+
+    app->fhttp->state = IDLE;
+
+    if(app->fhttp->last_response) {
+        app->fhttp->last_response[0] = '\0';
+    }
+
+    char headers[224];
+
+    snprintf(
+        headers,
+        sizeof(headers),
+        "{\"Authorization\":\"Bearer %s\","
+        "\"Content-Type\":\"application/json\"}",
+        app->api_token);
+
+    if(!flipper_http_request(
+           app->fhttp,
+           POST,
+           url,
+           headers,
+           payload ? payload : "{}")) {
+        return false;
+    }
+
+    app->fhttp->state = RECEIVING;
+
+    uint8_t counter = 100;
+
+    while((app->fhttp->state != IDLE) &&
+          (app->fhttp->state != ISSUE) &&
+          (--counter > 0)) {
+        furi_delay_ms(100);
+    }
+
+    if(app->fhttp->state == ISSUE) {
+        return false;
+    }
+
+    return counter > 0;
+}
+
+
+static bool smart_home_extract_json_scalar(
+    const char* json,
+    const char* key,
+    char* output,
+    size_t output_size) {
+
+    if(!json || !key || !output || output_size == 0) {
+        return false;
+    }
+
+    char needle[64];
+
+    int needle_len = snprintf(
+        needle,
+        sizeof(needle),
+        "\"%s\"",
+        key);
+
+    if(needle_len <= 0 ||
+       (size_t)needle_len >= sizeof(needle)) {
+        return false;
+    }
+
+    const char* pos = strstr(json, needle);
+
+    if(!pos) {
+        return false;
+    }
+
+    pos += strlen(needle);
+
+    while(*pos == ' ' ||
+          *pos == '\t' ||
+          *pos == '\r' ||
+          *pos == '\n') {
+        pos++;
+    }
+
+    if(*pos != ':') {
+        return false;
+    }
+
+    pos++;
+
+    while(*pos == ' ' ||
+          *pos == '\t' ||
+          *pos == '\r' ||
+          *pos == '\n') {
+        pos++;
+    }
+
+    bool quoted = false;
+
+    if(*pos == '"') {
+        quoted = true;
+        pos++;
+    }
+
+    const char* end = pos;
+
+    if(quoted) {
+        while(*end && *end != '"') {
+            end++;
+        }
+    } else {
+        while(*end &&
+              *end != ',' &&
+              *end != '}' &&
+              *end != ']' &&
+              *end != '\r' &&
+              *end != '\n') {
+            end++;
+        }
+
+        while(end > pos &&
+              (end[-1] == ' ' || end[-1] == '\t')) {
+            end--;
+        }
+    }
+
+    if(end <= pos) {
+        return false;
+    }
+
+    size_t len = (size_t)(end - pos);
+
+    if(len >= output_size) {
+        len = output_size - 1;
+    }
+
+    memcpy(output, pos, len);
+    output[len] = '\0';
+
+    return true;
+}
+
 
 static bool smart_home_extract_json_string(
     const char* json,
@@ -315,6 +476,8 @@ static const char* smart_home_device_type_name(DeviceType type) {
     switch(type) {
     case DeviceTypeShelly:
         return "shelly";
+    case DeviceTypeHomeAssistantThermostat:
+        return "ha_thermostat";
     default:
         return "unknown";
     }
@@ -433,11 +596,28 @@ static void smart_home_load_devices(SmartHomeApp* app) {
                                 const char* ip = second + 1;
                                 const char* remote_id = third + 1;
 
+                                DeviceType parsed_type = 0;
+                                bool valid_record = false;
+
                                 if(strcmp(type, "shelly") == 0 &&
                                    strlen(name) > 0 &&
                                    strlen(ip) > 0) {
 
-                                    device->type = DeviceTypeShelly;
+                                    parsed_type = DeviceTypeShelly;
+                                    valid_record = true;
+
+                                } else if(
+                                    strcmp(type, "ha_thermostat") == 0 &&
+                                    strlen(name) > 0 &&
+                                    strlen(remote_id) > 0) {
+
+                                    parsed_type =
+                                        DeviceTypeHomeAssistantThermostat;
+                                    valid_record = true;
+                                }
+
+                                if(valid_record) {
+                                    device->type = parsed_type;
 
                                     strlcpy(
                                         device->name,
@@ -688,7 +868,10 @@ static void smart_home_show_result(
 
 static void smart_home_refresh_main_menu(SmartHomeApp* app);
 
-static void smart_home_open_device(SmartHomeApp* app, size_t index) {
+static void smart_home_open_device(
+    SmartHomeApp* app,
+    size_t index) {
+
     if(index >= app->device_count) {
         return;
     }
@@ -699,34 +882,6 @@ static void smart_home_open_device(SmartHomeApp* app, size_t index) {
     submenu_set_header(
         app->device_menu,
         app->devices[index].name);
-
-    submenu_add_item(
-        app->device_menu,
-        "Turn ON",
-        DeviceActionOn,
-        NULL,
-        NULL);
-
-    submenu_add_item(
-        app->device_menu,
-        "Turn OFF",
-        DeviceActionOff,
-        NULL,
-        NULL);
-
-    submenu_add_item(
-        app->device_menu,
-        "Toggle",
-        DeviceActionToggle,
-        NULL,
-        NULL);
-
-    submenu_add_item(
-        app->device_menu,
-        "Delete Device",
-        DeviceActionDelete,
-        NULL,
-        NULL);
 }
 
 /* ---------- Input ---------- */
@@ -965,6 +1120,102 @@ static bool smart_home_ip_input_callback(
     return handled;
 }
 
+static bool smart_home_valid_climate_entity(
+    const char* entity_id) {
+
+    if(!entity_id) {
+        return false;
+    }
+
+    const char prefix[] = "climate.";
+
+    if(strncmp(
+           entity_id,
+           prefix,
+           sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+
+    const char* p =
+        entity_id + sizeof(prefix) - 1;
+
+    if(*p == '\0') {
+        return false;
+    }
+
+    for(; *p; p++) {
+        bool valid =
+            (*p >= 'a' && *p <= 'z') ||
+            (*p >= '0' && *p <= '9') ||
+            (*p == '_');
+
+        if(!valid) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static void smart_home_ha_entity_entered(
+    void* context) {
+
+    SmartHomeApp* app = context;
+
+    if(app->device_count >= MAX_DEVICES) {
+        smart_home_show_result(
+            app,
+            "Smart Home",
+            "Device list full");
+        return;
+    }
+
+    if(!smart_home_valid_climate_entity(
+           app->entity_input)) {
+
+        smart_home_show_result(
+            app,
+            "Invalid Entity",
+            "Use climate.name");
+
+        return;
+    }
+
+    SmartHomeDevice* device =
+        &app->devices[app->device_count];
+
+    memset(
+        device,
+        0,
+        sizeof(SmartHomeDevice));
+
+    device->type =
+        DeviceTypeHomeAssistantThermostat;
+
+    strlcpy(
+        device->name,
+        app->pending_name,
+        sizeof(device->name));
+
+    device->ip[0] = '\0';
+
+    strlcpy(
+        device->remote_id,
+        app->entity_input,
+        sizeof(device->remote_id));
+
+    app->device_count++;
+
+    smart_home_save_devices(app);
+    smart_home_refresh_main_menu(app);
+
+    view_dispatcher_switch_to_view(
+        app->view_dispatcher,
+        SmartHomeViewMain);
+}
+
+
 static void smart_home_name_entered(void* context) {
     SmartHomeApp* app = context;
 
@@ -979,6 +1230,54 @@ static void smart_home_name_entered(void* context) {
         app->pending_name,
         app->input_buffer,
         sizeof(app->pending_name));
+
+    if(app->pending_device_type ==
+       DeviceTypeHomeAssistantThermostat) {
+
+        if(app->relay_url[0] == '\0' ||
+           app->api_token[0] == '\0') {
+
+            smart_home_show_result(
+                app,
+                "Remote Setup",
+                "Configure Settings first");
+
+            return;
+        }
+
+        memset(
+            app->entity_input,
+            0,
+            sizeof(app->entity_input));
+
+        strlcpy(
+            app->entity_input,
+            "climate.",
+            sizeof(app->entity_input));
+
+        app->input_mode =
+            InputModeHaEntity;
+
+        text_input_reset(app->text_input);
+
+        text_input_set_header_text(
+            app->text_input,
+            "HA climate entity");
+
+        text_input_set_result_callback(
+            app->text_input,
+            smart_home_ha_entity_entered,
+            app,
+            app->entity_input,
+            DEVICE_REMOTE_ID_SIZE,
+            false);
+
+        view_dispatcher_switch_to_view(
+            app->view_dispatcher,
+            SmartHomeViewTextInput);
+
+        return;
+    }
 
     app->input_mode = InputModeIp;
 
@@ -1037,6 +1336,169 @@ static void smart_home_rename_entered(void* context) {
         "Device renamed");
 }
 
+static void smart_home_set_temperature_entered(void* context) {
+    SmartHomeApp* app = context;
+
+    if(app->selected_device >= app->device_count) {
+        view_dispatcher_switch_to_view(
+            app->view_dispatcher,
+            SmartHomeViewMain);
+        return;
+    }
+
+    SmartHomeDevice* device =
+        &app->devices[app->selected_device];
+
+    if(device->type !=
+       DeviceTypeHomeAssistantThermostat) {
+        return;
+    }
+
+    char* end = NULL;
+
+    float temperature =
+        strtof(app->input_buffer, &end);
+
+    if(end == app->input_buffer ||
+       *end != '\0' ||
+       temperature < 50.0f ||
+       temperature > 90.0f) {
+
+        smart_home_show_result(
+            app,
+            "Invalid Temperature",
+            "Enter 50 to 90 F");
+
+        return;
+    }
+
+    if(app->relay_url[0] == '\0' ||
+       app->api_token[0] == '\0') {
+
+        smart_home_show_result(
+            app,
+            "Remote Setup",
+            "Configure Settings first");
+
+        return;
+    }
+
+    char url[URL_SIZE];
+    char payload[96];
+
+    snprintf(
+        url,
+        sizeof(url),
+        "%s/ha/climate/%s/temperature",
+        app->relay_url,
+        device->remote_id);
+
+    snprintf(
+        payload,
+        sizeof(payload),
+        "{\"temperature\":%.1f}",
+        (double)temperature);
+
+    dialog_ex_set_header(
+        app->dialog,
+        device->name,
+        64,
+        12,
+        AlignCenter,
+        AlignCenter);
+
+    dialog_ex_set_text(
+        app->dialog,
+        "Setting temperature...",
+        64,
+        34,
+        AlignCenter,
+        AlignCenter);
+
+    dialog_ex_set_center_button_text(
+        app->dialog,
+        NULL);
+
+    view_dispatcher_switch_to_view(
+        app->view_dispatcher,
+        SmartHomeViewResult);
+
+    bool success =
+        smart_home_send_post(
+            app,
+            url,
+            payload);
+
+    if(!success) {
+        smart_home_show_result(
+            app,
+            "HTTP Error",
+            app->fhttp->last_response &&
+                    strlen(app->fhttp->last_response) ?
+                app->fhttp->last_response :
+                "No response");
+
+        return;
+    }
+
+    char message[48];
+
+    snprintf(
+        message,
+        sizeof(message),
+        "Set to %.1f F",
+        (double)temperature);
+
+    smart_home_show_result(
+        app,
+        device->name,
+        message);
+}
+
+
+static void smart_home_begin_set_temperature(
+    SmartHomeApp* app) {
+
+    if(app->selected_device >= app->device_count) {
+        return;
+    }
+
+    memset(
+        app->input_buffer,
+        0,
+        sizeof(app->input_buffer));
+
+    /*
+     * Convenient starting value. It remains fully editable.
+     */
+    strlcpy(
+        app->input_buffer,
+        "75",
+        sizeof(app->input_buffer));
+
+    app->input_mode =
+        InputModeSetTemperature;
+
+    text_input_reset(app->text_input);
+
+    text_input_set_header_text(
+        app->text_input,
+        "Set temperature F");
+
+    text_input_set_result_callback(
+        app->text_input,
+        smart_home_set_temperature_entered,
+        app,
+        app->input_buffer,
+        DEVICE_NAME_SIZE,
+        false);
+
+    view_dispatcher_switch_to_view(
+        app->view_dispatcher,
+        SmartHomeViewTextInput);
+}
+
+
 static void smart_home_begin_rename_device(SmartHomeApp* app) {
     if(app->selected_device >= app->device_count) {
         return;
@@ -1078,6 +1540,8 @@ static void smart_home_device_type_callback(
 
     switch(index) {
     case DeviceTypeShelly:
+    case DeviceTypeHomeAssistantThermostat:
+        app->pending_device_type = (DeviceType)index;
         smart_home_begin_device_details(app);
         break;
 
@@ -1104,6 +1568,13 @@ static void smart_home_begin_add_device(SmartHomeApp* app) {
         app->device_type_menu,
         "Shelly Smart Device",
         DeviceTypeShelly,
+        smart_home_device_type_callback,
+        app);
+
+    submenu_add_item(
+        app->device_type_menu,
+        "Home Assistant Thermostat",
+        DeviceTypeHomeAssistantThermostat,
         smart_home_device_type_callback,
         app);
 
@@ -1299,6 +1770,11 @@ static void smart_home_device_action_callback(
         return;
     }
 
+    if(index == DeviceActionThermostatSetTemperature) {
+        smart_home_begin_set_temperature(app);
+        return;
+    }
+
     if(index == DeviceActionDelete) {
         for(size_t i = app->selected_device;
             i + 1 < app->device_count;
@@ -1321,8 +1797,6 @@ static void smart_home_device_action_callback(
         return;
     }
 
-    char url[URL_SIZE];
-
     if(app->relay_url[0] == '\0' ||
        app->api_token[0] == '\0') {
 
@@ -1334,45 +1808,182 @@ static void smart_home_device_action_callback(
         return;
     }
 
-    if(device->remote_id[0] == '\0') {
-        smart_home_show_result(
-            app,
-            "Remote Error",
-            "Device not registered");
-        return;
-    }
+    char url[URL_SIZE];
+    char payload[96];
 
-    const char* remote_device = device->remote_id;
+    url[0] = '\0';
+    strlcpy(payload, "{}", sizeof(payload));
 
-    switch(index) {
-    case DeviceActionOn:
-        snprintf(
-            url,
-            sizeof(url),
-            "%s/device/%s/on",
-            app->relay_url,
-            remote_device);
-        break;
+    bool use_post = false;
 
-    case DeviceActionOff:
-        snprintf(
-            url,
-            sizeof(url),
-            "%s/device/%s/off",
-            app->relay_url,
-            remote_device);
-        break;
+    if(device->type == DeviceTypeShelly) {
 
-    case DeviceActionToggle:
-        snprintf(
-            url,
-            sizeof(url),
-            "%s/device/%s/toggle",
-            app->relay_url,
-            remote_device);
-        break;
+        if(device->remote_id[0] == '\0') {
+            smart_home_show_result(
+                app,
+                "Remote Error",
+                "Device not registered");
+            return;
+        }
 
-    default:
+        const char* remote_device =
+            device->remote_id;
+
+        switch(index) {
+        case DeviceActionOn:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/device/%s/on",
+                app->relay_url,
+                remote_device);
+            break;
+
+        case DeviceActionOff:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/device/%s/off",
+                app->relay_url,
+                remote_device);
+            break;
+
+        case DeviceActionToggle:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/device/%s/toggle",
+                app->relay_url,
+                remote_device);
+            break;
+
+        default:
+            return;
+        }
+
+    } else if(
+        device->type ==
+        DeviceTypeHomeAssistantThermostat) {
+
+        switch(index) {
+        case DeviceActionThermostatStatus:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/status",
+                app->relay_url,
+                device->remote_id);
+            break;
+
+        case DeviceActionThermostatTempUp:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/temp_up",
+                app->relay_url,
+                device->remote_id);
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatTempDown:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/temp_down",
+                app->relay_url,
+                device->remote_id);
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatCool:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/mode",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"mode\":\"cool\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatHeat:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/mode",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"mode\":\"heat\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatAuto:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/mode",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"mode\":\"heat_cool\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatOff:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/mode",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"mode\":\"off\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatFanAuto:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/fan",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"fan_mode\":\"auto\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        case DeviceActionThermostatFanOn:
+            snprintf(
+                url,
+                sizeof(url),
+                "%s/ha/climate/%s/fan",
+                app->relay_url,
+                device->remote_id);
+            strlcpy(
+                payload,
+                "{\"fan_mode\":\"on\"}",
+                sizeof(payload));
+            use_post = true;
+            break;
+
+        default:
+            return;
+        }
+
+    } else {
         return;
     }
 
@@ -1392,15 +2003,49 @@ static void smart_home_device_action_callback(
         AlignCenter,
         AlignCenter);
 
-    dialog_ex_set_center_button_text(app->dialog, NULL);
+    dialog_ex_set_center_button_text(
+        app->dialog,
+        NULL);
 
     view_dispatcher_switch_to_view(
         app->view_dispatcher,
         SmartHomeViewResult);
 
-    bool success = smart_home_send(app, url);
+    bool success;
 
-    if(success) {
+    if(use_post) {
+        success =
+            smart_home_send_post(
+                app,
+                url,
+                payload);
+    } else {
+        success =
+            smart_home_send(
+                app,
+                url);
+    }
+
+    if(!success) {
+        FURI_LOG_E(
+            TAG,
+            "Request failed: %s",
+            app->fhttp->last_response ?
+                app->fhttp->last_response :
+                "No response");
+
+        smart_home_show_result(
+            app,
+            "HTTP Error",
+            app->fhttp->last_response &&
+                    strlen(app->fhttp->last_response) ?
+                app->fhttp->last_response :
+                "No response");
+
+        return;
+    }
+
+    if(device->type == DeviceTypeShelly) {
         if(index == DeviceActionOn) {
             smart_home_show_result(
                 app,
@@ -1417,23 +2062,117 @@ static void smart_home_device_action_callback(
                 device->name,
                 "Toggled");
         }
-    } else {
-        FURI_LOG_E(
-            TAG,
-            "Request failed: %s",
-            app->fhttp->last_response ?
-                app->fhttp->last_response :
-                "No response");
+
+        return;
+    }
+
+    if(index == DeviceActionThermostatStatus) {
+        char current[16] = "?";
+        char target[16] = "?";
+        char state[20] = "?";
+        char fan[20] = "?";
+        char humidity[16] = "?";
+
+        const char* response =
+            app->fhttp->last_response;
+
+        if(response) {
+            smart_home_extract_json_scalar(
+                response,
+                "current_temperature",
+                current,
+                sizeof(current));
+
+            smart_home_extract_json_scalar(
+                response,
+                "temperature",
+                target,
+                sizeof(target));
+
+            smart_home_extract_json_scalar(
+                response,
+                "state",
+                state,
+                sizeof(state));
+
+            smart_home_extract_json_scalar(
+                response,
+                "fan_mode",
+                fan,
+                sizeof(fan));
+
+            smart_home_extract_json_scalar(
+                response,
+                "current_humidity",
+                humidity,
+                sizeof(humidity));
+        }
+
+        char message[128];
+
+        snprintf(
+            message,
+            sizeof(message),
+            "Now %sF  Set %sF\n%s / Fan %s\nHumidity %s%%",
+            current,
+            target,
+            state,
+            fan,
+            humidity);
 
         smart_home_show_result(
             app,
-            "HTTP Error",
-            app->fhttp->last_response &&
-                    strlen(app->fhttp->last_response) ?
-                app->fhttp->last_response :
-                "No response");
+            device->name,
+            message);
+
+        return;
     }
+
+    const char* message = "Command sent";
+
+    switch(index) {
+    case DeviceActionThermostatTempUp:
+        message = "Temperature +1";
+        break;
+
+    case DeviceActionThermostatTempDown:
+        message = "Temperature -1";
+        break;
+
+    case DeviceActionThermostatCool:
+        message = "Mode: Cool";
+        break;
+
+    case DeviceActionThermostatHeat:
+        message = "Mode: Heat";
+        break;
+
+    case DeviceActionThermostatAuto:
+        message = "Mode: Auto";
+        break;
+
+    case DeviceActionThermostatOff:
+        message = "HVAC Off";
+        break;
+
+    case DeviceActionThermostatFanAuto:
+        message = "Fan: Auto";
+        break;
+
+    case DeviceActionThermostatFanOn:
+        message = "Fan: On";
+        break;
+
+    default:
+        break;
+    }
+
+    smart_home_show_result(
+        app,
+        device->name,
+        message);
 }
+
 
 static void smart_home_main_callback(
     void* context,
@@ -1454,35 +2193,111 @@ static void smart_home_main_callback(
     if(index < app->device_count) {
         smart_home_open_device(app, index);
 
-        /*
-         * Callbacks are assigned here after the menu has
-         * been populated.
-         */
         submenu_reset(app->device_menu);
         submenu_set_header(
             app->device_menu,
             app->devices[index].name);
 
-        submenu_add_item(
-            app->device_menu,
-            "Turn ON",
-            DeviceActionOn,
-            smart_home_device_action_callback,
-            app);
+        SmartHomeDevice* device =
+            &app->devices[index];
 
-        submenu_add_item(
-            app->device_menu,
-            "Turn OFF",
-            DeviceActionOff,
-            smart_home_device_action_callback,
-            app);
+        if(device->type == DeviceTypeShelly) {
 
-        submenu_add_item(
-            app->device_menu,
-            "Toggle",
-            DeviceActionToggle,
-            smart_home_device_action_callback,
-            app);
+            submenu_add_item(
+                app->device_menu,
+                "Turn ON",
+                DeviceActionOn,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Turn OFF",
+                DeviceActionOff,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Toggle",
+                DeviceActionToggle,
+                smart_home_device_action_callback,
+                app);
+
+        } else if(
+            device->type ==
+            DeviceTypeHomeAssistantThermostat) {
+
+            submenu_add_item(
+                app->device_menu,
+                "Status",
+                DeviceActionThermostatStatus,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Temp +1",
+                DeviceActionThermostatTempUp,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Temp -1",
+                DeviceActionThermostatTempDown,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Set Temperature",
+                DeviceActionThermostatSetTemperature,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Cool",
+                DeviceActionThermostatCool,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Heat",
+                DeviceActionThermostatHeat,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Auto",
+                DeviceActionThermostatAuto,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Off",
+                DeviceActionThermostatOff,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Fan Auto",
+                DeviceActionThermostatFanAuto,
+                smart_home_device_action_callback,
+                app);
+
+            submenu_add_item(
+                app->device_menu,
+                "Fan On",
+                DeviceActionThermostatFanOn,
+                smart_home_device_action_callback,
+                app);
+        }
 
         submenu_add_item(
             app->device_menu,

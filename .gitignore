@@ -13,3 +13,17 @@ dist/
 *.tmp
 *.log
 *before*
+
+# Local credentials / runtime state
+.api-token
+.ha-token
+devices.json
+settings.txt
+
+# Python / relay runtime
+__pycache__/
+*.pyc
+
+# Local environment
+.env
+.env.*
