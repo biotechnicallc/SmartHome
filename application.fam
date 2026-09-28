@@ -8,5 +8,5 @@ App(
     fap_icon="smart_home_10px.png",
     fap_description="Control supported smart home devices through a Wi-Fi Developer Board",
     fap_author="Vincenzo",
-    fap_version="1.0.0",
+    fap_version="1.0",
 )
