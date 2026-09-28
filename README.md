@@ -97,6 +97,10 @@ Available HVAC and fan modes ultimately depend on the capabilities exposed by th
 
 ## Companion Relay
 
+The companion relay is available at:
+
+https://github.com/biotechnicallc/SmartHome-Relay
+
 The application communicates with the companion Smart Home relay over HTTP using bearer-token authentication.
 
 The relay provides:

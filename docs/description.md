@@ -56,4 +56,8 @@ Available HVAC and fan modes depend on the capabilities of the selected Home Ass
 
 A compatible FlipperHTTP Wi-Fi Developer Board and reachable Smart Home relay server are required.
 
+Companion relay:
+
+https://github.com/biotechnicallc/SmartHome-Relay
+
 Home Assistant is only required when using Home Assistant thermostat support.
