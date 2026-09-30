@@ -35,9 +35,9 @@ Home Assistant thermostats can be added using their climate.* entity ID.
 
 Examples:
 
-    climate.living_room
-    climate.bedroom
-    climate.downstairs
+- climate.living_room
+- climate.bedroom
+- climate.downstairs
 
 Supported thermostat actions include:
 
