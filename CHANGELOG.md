@@ -4,7 +4,7 @@
 
 Added Home Assistant climate/thermostat support.
 
-- Added generic Home Assistant `climate.*` entity support
+- Added generic Home Assistant climate.* entity support
 - Added Home Assistant Thermostat device type
 - Added thermostat status display
 - Added temperature increase and decrease controls

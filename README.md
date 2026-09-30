@@ -12,7 +12,7 @@ Smart Home is a Flipper Zero application for controlling supported smart home de
 - Editable IPv4 device entry for supported LAN devices
 - Shelly smart device support
 - Home Assistant climate/thermostat support
-- Generic Home Assistant `climate.*` entities
+- Generic Home Assistant climate.* entities
 - Thermostat status, temperature, HVAC mode, and fan controls
 
 ## Requirements
@@ -28,7 +28,7 @@ The companion relay is required. It handles authenticated communication between 
 
 ## First-Time Setup
 
-1. Install `smart_home.fap` on the Flipper Zero.
+1. Install smart_home.fap on the Flipper Zero.
 2. Connect the Wi-Fi Developer Board.
 3. Open **Smart Home**.
 4. Open **Settings**.
@@ -44,7 +44,7 @@ The companion relay is required. It handles authenticated communication between 
 3. Enter the Shelly device's IPv4 address.
 4. The relay discovers the device and stores its stable Shelly device ID.
 
-The IPv4 editor starts at `192.168.7.0` for convenience. Every octet is editable.
+The IPv4 editor starts at 192.168.7.0 for convenience. Every octet is editable.
 
 ### Adding a Home Assistant thermostat
 
@@ -58,7 +58,7 @@ Examples:
     climate.bedroom
     climate.downstairs
 
-The public application does not contain a hard-coded thermostat entity. Each user supplies their own Home Assistant `climate.*` entity when adding the device.
+The public application does not contain a hard-coded thermostat entity. Each user supplies their own Home Assistant climate.* entity when adding the device.
 
 ## Current Device Support
 
@@ -76,7 +76,7 @@ Supported actions include:
 
 ### Home Assistant Climate / Thermostat
 
-Home Assistant thermostats are addressed through generic `climate.*` entity IDs.
+Home Assistant thermostats are addressed through generic climate.* entity IDs.
 
 Supported actions include:
 
@@ -108,7 +108,7 @@ The relay provides:
 - Shelly registration and stable device IDs
 - RFC1918-only Shelly registration targets
 - Home Assistant API integration
-- Generic `climate.*` thermostat endpoints
+- Generic climate.* thermostat endpoints
 - Optional Home Assistant support
 - Separate relay and Home Assistant credentials
 
@@ -124,10 +124,10 @@ Smart Home stores application data under:
 
 Current files include:
 
-- `devices.txt`
-- `settings.txt`
+- devices.txt
+- settings.txt
 
-The relay API token is stored locally in `settings.txt`. Treat the Flipper Zero SD card as sensitive if the configured relay token grants remote-control access.
+The relay API token is stored locally in settings.txt. Treat the Flipper Zero SD card as sensitive if the configured relay token grants remote-control access.
 
 ## Building
 
@@ -156,11 +156,11 @@ To install and launch directly on a connected Flipper Zero:
 
 This project includes the MIT-licensed FlipperHTTP library by JBlanked.
 
-See `THIRD_PARTY_NOTICES.md` for attribution and upstream project information.
+See THIRD_PARTY_NOTICES.md for attribution and upstream project information.
 
 ## Version
 
-Current release: `1.1`
+Current release: 1.1
 
 ## Author
 

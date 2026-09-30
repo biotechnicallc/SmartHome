@@ -12,7 +12,7 @@ Smart Home lets you control supported smart home devices from your Flipper Zero 
 - Editable IPv4 address entry
 - Shelly smart device support
 - Home Assistant climate/thermostat support
-- Generic Home Assistant `climate.*` entity support
+- Generic Home Assistant climate.* entity support
 - Thermostat status and temperature controls
 - HVAC mode controls
 - Fan mode controls
@@ -31,7 +31,7 @@ Supported actions include:
 
 ## Home Assistant Thermostat Support
 
-Home Assistant thermostats can be added using their `climate.*` entity ID.
+Home Assistant thermostats can be added using their climate.* entity ID.
 
 Examples:
 
